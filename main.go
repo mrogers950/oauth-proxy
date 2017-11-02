@@ -49,6 +49,7 @@ func main() {
 	flagSet.Bool("skip-provider-button", false, "will skip sign-in-page to directly reach the next step: oauth/start")
 	flagSet.Bool("skip-auth-preflight", false, "will skip authentication for OPTIONS requests")
 	flagSet.Bool("ssl-insecure-skip-verify", false, "skip validation of certificates presented when using HTTPS")
+	flagSet.Bool("upstream-insecure-skip-verify", false, "skip validation of certificates received from upstream when using HTTPS, for debugging/testing only")
 	flagSet.String("debug-address", "", "[http://]<addr>:<port> or unix://<path> to listen on for debug and requests")
 
 	flagSet.Var(&emailDomains, "email-domain", "authenticate emails with the specified domain (may be given multiple times). Use * to authenticate any email")

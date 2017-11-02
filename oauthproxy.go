@@ -95,7 +95,7 @@ func (u *UpstreamProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	u.handler.ServeHTTP(w, r)
 }
 
-func NewReverseProxy(target *url.URL, upstreamFlush time.Duration, rootCAs []string) (*httputil.ReverseProxy, error) {
+func NewReverseProxy(target *url.URL, upstreamFlush time.Duration, rootCAs []string, skipVerify bool) (*httputil.ReverseProxy, error) {
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.FlushInterval = upstreamFlush
 
@@ -109,7 +109,8 @@ func NewReverseProxy(target *url.URL, upstreamFlush time.Duration, rootCAs []str
 			return nil, err
 		}
 		transport.TLSClientConfig = &tls.Config{
-			RootCAs: pool,
+			RootCAs:            pool,
+			InsecureSkipVerify: skipVerify,
 		}
 	}
 	if err := http2.ConfigureTransport(transport); err != nil {
@@ -159,7 +160,7 @@ func NewOAuthProxy(opts *Options, validator func(string) bool) *OAuthProxy {
 		case "http", "https":
 			u.Path = ""
 			log.Printf("mapping path %q => upstream %q", path, u)
-			proxy, err := NewReverseProxy(u, opts.UpstreamFlush, opts.UpstreamCAs)
+			proxy, err := NewReverseProxy(u, opts.UpstreamFlush, opts.UpstreamCAs, opts.UpstreamInsecureSkipVerify)
 			if err != nil {
 				log.Fatal("Failed to initialize Reverse Proxy: ", err)
 			}
