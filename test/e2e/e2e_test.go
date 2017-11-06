@@ -23,21 +23,18 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/golang/glog"
-	"github.com/kubernetes-incubator/service-catalog/test/e2e/framework"
+	"github.com/openshift/oauth-proxy/test/e2e/framework"
 )
 
-var brokerImageFlag string
+var oauthProxyImageFlag string
 
 func init() {
-	flag.StringVar(&brokerImageFlag, "broker-image", "quay.io/kubernetes-service-catalog/user-broker:latest",
+	flag.StringVar(&oauthProxyImageFlag, "oauth-proxy-image", "docker.io/openshift/oauth-proxy:v1.0.0",
 		"The container image for the broker to test against")
 	framework.RegisterParseFlags()
 
 	if "" == framework.TestContext.KubeConfig {
 		glog.Fatalf("environment variable %v must be set", clientcmd.RecommendedConfigPathEnvVar)
-	}
-	if "" == framework.TestContext.ServiceCatalogConfig {
-		glog.Fatalf("environment variable %v must be set", framework.RecommendedConfigPathEnvVar)
 	}
 }
 

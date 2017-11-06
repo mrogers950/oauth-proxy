@@ -17,13 +17,11 @@ limitations under the License.
 package framework
 
 import (
-	"k8s.io/client-go/kubernetes"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/client-go/kubernetes"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
-
-	"github.com/kubernetes-incubator/service-catalog/pkg/client/clientset_generated/clientset"
 )
 
 // Framework supports common operations used by e2e tests; it will keep a client & a namespace for you.
@@ -31,8 +29,7 @@ type Framework struct {
 	BaseName string
 
 	// A Kubernetes and Service Catalog client
-	KubeClientSet           kubernetes.Interface
-	ServiceCatalogClientSet clientset.Interface
+	KubeClientSet kubernetes.Interface
 
 	// Namespace in which all test resources should reside
 	Namespace *corev1.Namespace
@@ -65,11 +62,6 @@ func (f *Framework) BeforeEach() {
 	Expect(err).NotTo(HaveOccurred())
 	f.KubeClientSet, err = kubernetes.NewForConfig(kubeConfig)
 	Expect(err).NotTo(HaveOccurred())
-	By("Creating a service catalog client")
-	serviceCatatlogConfig, err := LoadConfig(TestContext.ServiceCatalogConfig, TestContext.ServiceCatalogContext)
-	Expect(err).NotTo(HaveOccurred())
-	f.ServiceCatalogClientSet, err = clientset.NewForConfig(serviceCatatlogConfig)
-	Expect(err).NotTo(HaveOccurred())
 	By("Building a namespace api object")
 	namespace, err := CreateKubeNamespace(f.BaseName, f.KubeClientSet)
 	Expect(err).NotTo(HaveOccurred())
@@ -85,6 +77,6 @@ func (f *Framework) AfterEach() {
 }
 
 // Wrapper function for ginkgo describe.  Adds namespacing.
-func ServiceCatalogDescribe(text string, body func()) bool {
-	return Describe("[service-catalog] "+text, body)
+func OAuthProxyDescribe(text string, body func()) bool {
+	return Describe("[oauth-proxy] "+text, body)
 }

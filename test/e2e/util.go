@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func NewUPSBrokerPod(name string) *corev1.Pod {
+func NewOAuthProxyPod(name string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,
@@ -34,7 +34,6 @@ func NewUPSBrokerPod(name string) *corev1.Pod {
 			Containers: []corev1.Container{
 				{
 					Name:  name,
-					Image: brokerImageFlag,
 					Args: []string{
 						"--port",
 						"8080",
@@ -50,7 +49,7 @@ func NewUPSBrokerPod(name string) *corev1.Pod {
 	}
 }
 
-func NewUPSBrokerService(name string) *corev1.Service {
+func NewOAuthProxyService(name string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: name,

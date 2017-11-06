@@ -22,12 +22,11 @@ import (
 	"k8s.io/apiserver/pkg/util/logs"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
-	"github.com/kubernetes-incubator/service-catalog/test/e2e/framework"
-
 	"github.com/golang/glog"
 	"github.com/onsi/ginkgo"
 	"github.com/onsi/ginkgo/config"
 	"github.com/onsi/gomega"
+	"github.com/openshift/oauth-proxy/test/e2e/framework"
 )
 
 // TestE2E checks configuration parameters (specified through flags) and then runs
@@ -43,5 +42,5 @@ func RunE2ETests(t *testing.T) {
 	}
 
 	glog.Infof("Starting e2e run %q on Ginkgo node %d", framework.RunId, config.GinkgoConfig.ParallelNode)
-	ginkgo.RunSpecs(t, "Service Catalog e2e suite")
+	ginkgo.RunSpecs(t, "oauth-proxy e2e suite")
 }

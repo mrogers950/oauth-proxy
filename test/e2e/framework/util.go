@@ -25,6 +25,7 @@ import (
 
 	apierrs "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
 
@@ -100,17 +101,20 @@ func LoadConfig(config, context string) (*rest.Config, error) {
 var RunId = uuid.NewUUID()
 
 func CreateKubeNamespace(baseName string, c kubernetes.Interface) (*corev1.Namespace, error) {
+
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("e2e-tests-%v-", baseName),
+			Namespace:    "",
 		},
 	}
+
 	Logf("namespace: %v", ns)
 	// Be robust about making the namespace creation call.
 	var got *corev1.Namespace
 	err := wait.PollImmediate(Poll, defaultTimeout, func() (bool, error) {
 		var err error
-		got, err = c.CoreV1().Namespaces().Create(ns)
+		got, err = c.Core().Namespaces().Create(ns)
 		if err != nil {
 			Logf("Unexpected error while creating namespace: %v", err)
 			return false, nil
