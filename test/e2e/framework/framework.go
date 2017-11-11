@@ -18,6 +18,7 @@ package framework
 
 import (
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	. "github.com/onsi/ginkgo"
@@ -45,6 +46,11 @@ type Framework struct {
 func NewDefaultFramework(baseName string) *Framework {
 	f := &Framework{
 		BaseName: baseName,
+		Namespace: &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "oauth-proxy",
+			},
+		},
 	}
 
 	BeforeEach(f.BeforeEach)
@@ -72,7 +78,7 @@ func (f *Framework) BeforeEach() {
 // AfterEach deletes the namespace, after reading its events.
 func (f *Framework) AfterEach() {
 	RemoveCleanupAction(f.cleanupHandle)
-	err := DeleteKubeNamespace(f.KubeClientSet, f.Namespace.String())
+	err := DeleteKubeNamespace(f.KubeClientSet, f.Namespace.Name)
 	Expect(err).NotTo(HaveOccurred())
 }
 

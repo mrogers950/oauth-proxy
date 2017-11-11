@@ -105,7 +105,7 @@ func CreateKubeNamespace(baseName string, c kubernetes.Interface) (*corev1.Names
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: fmt.Sprintf("e2e-tests-%v-", baseName),
-			Namespace:    "",
+			Namespace:    "proxy-test",
 		},
 	}
 
