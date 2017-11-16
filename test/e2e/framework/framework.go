@@ -17,12 +17,12 @@ limitations under the License.
 package framework
 
 import (
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	corev1 "k8s.io/client-go/pkg/api/v1"
 )
 
 // Framework supports common operations used by e2e tests; it will keep a client & a namespace for you.
@@ -77,9 +77,11 @@ func (f *Framework) BeforeEach() {
 
 // AfterEach deletes the namespace, after reading its events.
 func (f *Framework) AfterEach() {
-	RemoveCleanupAction(f.cleanupHandle)
-	err := DeleteKubeNamespace(f.KubeClientSet, f.Namespace.Name)
-	Expect(err).NotTo(HaveOccurred())
+	/*
+		RemoveCleanupAction(f.cleanupHandle)
+		err := DeleteKubeNamespace(f.KubeClientSet, f.Namespace.Name)
+		Expect(err).NotTo(HaveOccurred())
+	*/
 }
 
 // Wrapper function for ginkgo describe.  Adds namespacing.

@@ -12,38 +12,36 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
 */
 
 package e2e
 
 import (
 	"bufio"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"golang.org/x/net/html"
+	"io"
 	"io/ioutil"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
 	"text/template"
+	"time"
 
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
 	"github.com/openshift/oauth-proxy/test/e2e/framework"
-	//"github.com/yhat/scrape"
 
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"net/http"
-	//"net/url"
-	"crypto/tls"
-	"crypto/x509"
-	"golang.org/x/net/html"
-	//"golang.org/x/net/html/atom"
-	"io"
-	"net/http/cookiejar"
-	"net/url"
-	"time"
+	corev1 "k8s.io/client-go/pkg/api/v1"
 )
 
 var (
@@ -118,14 +116,22 @@ ZJ/0sHCv5PI=
 )
 
 var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
-	f := framework.NewDefaultFramework("oauth-proxy")
 
 	appName := "proxy"
-	image := "docker.io/openshift/oauth-proxy:v1.0.0"
+	image := os.Getenv("DOCKER_IMG")
+	if image == "" {
+		image = "docker.io/openshift/oauth-proxy:v1.0.0"
+	}
+
+	f := framework.NewDefaultFramework("oauth-proxy")
 
 	It("Run walkthrough-example ", func() {
 		By("Creating an oauth-proxy SA")
 		_, err := f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(NewOAuthProxySA())
+		Expect(err).NotTo(HaveOccurred())
+
+		By("Creating an oauth-proxy route")
+		err = NewOAuthProxyRoute(appName, "proxy-route", appName, f.Namespace.Name, 8443)
 		Expect(err).NotTo(HaveOccurred())
 
 		By("Creating a proxy service")
@@ -152,27 +158,38 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 		err = framework.WaitForPodRunningInNamespace(f.KubeClientSet, pod)
 		Expect(err).NotTo(HaveOccurred())
 
-		By("Creating an oauth-proxy route")
-		err = NewOAuthProxyRoute(appName, "proxy-route", appName, f.Namespace.Name, 8443)
-		Expect(err).NotTo(HaveOccurred())
-
 		host, err := getRouteHost("proxy-route", f.Namespace.Name)
 		Expect(err).NotTo(HaveOccurred())
 
 		// xxx
 		fmt.Println(host)
 
-		err = confirmOAuthFlow(host)
+		// Find the service CA for the client trust store
+		secrets, err := f.KubeClientSet.CoreV1().Secrets(f.Namespace.Name).List(metav1.ListOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		var caPem []byte
+		for _, s := range secrets.Items {
+			cert, ok := s.Data["service-ca.crt"]
+			if !ok {
+				continue
+			}
+			caPem = cert
+			break
+		}
+		Expect(caPem).ShouldNot(BeNil())
+		fmt.Println(string(caPem))
+		err = confirmOAuthFlow(host, caPem)
 		Expect(err).NotTo(HaveOccurred())
 
 		// clean up
-		By("Deleting the oauth-proxy pod")
-		err = f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(appName, nil)
-		Expect(err).NotTo(HaveOccurred())
-		By("Deleting the oauth-proxy service")
-		err = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(appName, nil)
-		Expect(err).NotTo(HaveOccurred())
-
+		/*
+			By("Deleting the oauth-proxy pod")
+			err = f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(appName, nil)
+			Expect(err).NotTo(HaveOccurred())
+			By("Deleting the oauth-proxy service")
+			err = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(appName, nil)
+			Expect(err).NotTo(HaveOccurred())
+		*/
 	})
 })
 
@@ -192,14 +209,10 @@ func getResponse(host string, client *http.Client) (*http.Response, error) {
 	return resp, nil
 }
 
-func confirmOAuthFlow(host string) error {
-
-	// XXX not doing InsecureSkipVerify
-	// Needs to either generate certs for oauth-proxy that have the proper route name for CN
-	// or somehow expose the tls signer ca from a pod
-	// docker run a shell pod that cats the cert
+func confirmOAuthFlow(host string, ca []byte) error {
+	// Set up the client cert store
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM([]byte(tlsCA)) {
+	if !pool.AppendCertsFromPEM(ca) {
 		return fmt.Errorf("Error loading CA for client config")
 	}
 
@@ -208,8 +221,7 @@ func confirmOAuthFlow(host string) error {
 		MaxIdleConns:    10,
 		IdleConnTimeout: 30 * time.Second,
 		TLSClientConfig: &tls.Config{
-			RootCAs:            pool,
-			InsecureSkipVerify: true,
+			RootCAs: pool,
 		},
 	}
 
@@ -221,12 +233,12 @@ func confirmOAuthFlow(host string) error {
 		return err
 	}
 
-	loginResp, err := submitFormRequest(client, resp)
+	loginResp, err := submitOAuthForm(client, resp)
 	if err != nil {
 		return err
 	}
 
-	accessResp, err := submitFormRequest(client, loginResp)
+	accessResp, err := submitOAuthForm(client, loginResp)
 	if err != nil {
 		return err
 	}
@@ -235,8 +247,6 @@ func confirmOAuthFlow(host string) error {
 	if err != nil {
 		return nil
 	}
-
-	// this is Hello OpenShift!
 	fmt.Println(string(accessRespBody))
 	if string(accessRespBody) != "Hello OpenShift!\n" {
 		return fmt.Errorf("did not reach backend site")
@@ -245,7 +255,7 @@ func confirmOAuthFlow(host string) error {
 	return nil
 }
 
-func submitFormRequest(client *http.Client, response *http.Response) (*http.Response, error) {
+func submitOAuthForm(client *http.Client, response *http.Response) (*http.Response, error) {
 	body, err := html.Parse(response.Body)
 	if err != nil {
 		return nil, err
@@ -428,7 +438,7 @@ func NewOAuthProxyPod(proxyImage string, proxyArgs []string) *corev1.Pod {
 					VolumeMounts: []corev1.VolumeMount{
 						{
 							MountPath: "/etc/tls/private",
-							Name:      "proxy-cert-volume",
+							Name:      "proxy-tls",
 						},
 					},
 				},
