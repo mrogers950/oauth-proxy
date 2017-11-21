@@ -47,6 +47,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/wait"
 	corev1 "k8s.io/client-go/pkg/api/v1"
 )
 
@@ -187,100 +188,168 @@ func createCAandCertSet(host string) ([]byte, []byte, []byte, error) {
 }
 
 var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
-	appName := "proxy"
-	routeName := "proxy-route"
-	routePort := int32(8443)
-	testName := "basic"
-	servicePort := int32(443)
-	serviceTargetPort := 8443
-	oauthProxyArgs := []string{
-		"--https-address=:8443",
-		"--provider=openshift",
-		"--openshift-service-account=proxy",
-		"--upstream=http://localhost:8080",
-		"--tls-cert=/etc/tls/private/tls.crt",
-		"--tls-key=/etc/tls/private/tls.key",
-		"--tls-client-ca=/etc/tls/private/ca.crt",
-		"--cookie-secret=SECRET",
+
+	oauthProxyTests := map[string]struct {
+		appName            string
+		routeName          string
+		routePort          int32
+		servicePort        int32
+		serviceTargetPort  int
+		serviceAccountName string
+		certConfigMapName  string
+		oauthProxyArgs     []string
+	}{
+		"basic": {
+			appName:            "proxy",
+			routeName:          "proxy-route",
+			routePort:          int32(8443),
+			servicePort:        int32(443),
+			serviceTargetPort:  8443,
+			serviceAccountName: "proxy",
+			certConfigMapName:  "proxy-certs",
+			oauthProxyArgs: []string{
+				"--https-address=:8443",
+				"--provider=openshift",
+				"--openshift-service-account=proxy",
+				"--upstream=http://localhost:8080",
+				"--tls-cert=/etc/tls/private/tls.crt",
+				"--tls-key=/etc/tls/private/tls.key",
+				"--tls-client-ca=/etc/tls/private/ca.crt",
+				"--cookie-secret=SECRET",
+			},
+		},
+		"basic-copy": {
+			appName:            "proxy",
+			routeName:          "proxy-route",
+			routePort:          int32(8443),
+			servicePort:        int32(443),
+			serviceTargetPort:  8443,
+			serviceAccountName: "proxy",
+			certConfigMapName:  "proxy-certs",
+			oauthProxyArgs: []string{
+				"--https-address=:8443",
+				"--provider=openshift",
+				"--openshift-service-account=proxy",
+				"--upstream=http://localhost:8080",
+				"--tls-cert=/etc/tls/private/tls.crt",
+				"--tls-key=/etc/tls/private/tls.key",
+				"--tls-client-ca=/etc/tls/private/ca.crt",
+				"--cookie-secret=SECRET",
+			},
+		},
 	}
 
-	image := os.Getenv("DOCKER_IMG")
+	image := os.Getenv("TEST_IMAGE")
 	if image == "" {
-		image = "docker.io/openshift/oauth-proxy:v1.0.0"
+		image = "docker.io/openshift/oauth-proxy:v1.1.0"
+	}
+	ns := os.Getenv("TEST_NAMESPACE")
+	if ns == "" {
+		ns = "default"
 	}
 
-	f := framework.NewDefaultFramework("oauth-proxy")
+	f := framework.NewDefaultFramework(ns)
 
-	It(fmt.Sprintf("running test: %s, namespace: %s", testName, f.Namespace.Name), func() {
+	try := 1
+	It(fmt.Sprintf("running test suite: namespace: %s", f.Namespace.Name), func() {
 
-		By(fmt.Sprintf("creating oauth-proxy service account with annotation for route '%s'", routeName))
-		_, err := f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(newOAuthProxySA(routeName))
-		Expect(err).NotTo(HaveOccurred())
+		for tcName, tc := range oauthProxyTests {
+			By(fmt.Sprintf("Test: %s", tcName))
+			By(fmt.Sprintf("creating oauth-proxy service account with annotation for route '%s'", tc.routeName))
+			_, err := f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(newOAuthProxySA(tc.serviceAccountName, tc.routeName))
+			Expect(err).NotTo(HaveOccurred())
 
-		By(fmt.Sprintf("creating route '%s' with port %v to oauth-proxy", routeName, routePort))
-		err = newOAuthProxyRoute(appName, routeName, appName, f.Namespace.Name, routePort)
-		Expect(err).NotTo(HaveOccurred())
+			By(fmt.Sprintf("creating route '%s' with port %v to oauth-proxy", tc.routeName, tc.routePort))
+			err = newOAuthProxyRoute(tc.appName, tc.routeName, tc.appName, f.Namespace.Name, tc.routePort)
+			Expect(err).NotTo(HaveOccurred())
 
-		// Find the exposed route hostname that we will be doing client actions against
-		proxyRouteHost, err := getRouteHost(routeName, f.Namespace.Name)
-		Expect(err).NotTo(HaveOccurred())
+			// Find the exposed route hostname that we will be doing client actions against
+			proxyRouteHost, err := getRouteHost(tc.routeName, f.Namespace.Name)
+			Expect(err).NotTo(HaveOccurred())
 
-		By(fmt.Sprintf("creating certificates for host '%s'", proxyRouteHost))
-		caPem, serviceCert, serviceKey, err := createCAandCertSet(proxyRouteHost)
-		Expect(err).NotTo(HaveOccurred())
+			By(fmt.Sprintf("creating certificates for host '%s'", proxyRouteHost))
+			caPem, serviceCert, serviceKey, err := createCAandCertSet(proxyRouteHost)
+			Expect(err).NotTo(HaveOccurred())
 
-		By(fmt.Sprintf("creating oauth-proxy service with ports '%v:%v'", servicePort, serviceTargetPort))
-		_, err = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Create(newOAuthProxyService(appName,
-			appName,
-			servicePort,
-			serviceTargetPort),
-		)
-		Expect(err).NotTo(HaveOccurred())
+			By(fmt.Sprintf("creating oauth-proxy service with ports '%v:%v'", tc.servicePort, tc.serviceTargetPort))
+			_, err = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Create(newOAuthProxyService(tc.appName,
+				tc.appName,
+				tc.servicePort,
+				tc.serviceTargetPort),
+			)
+			Expect(err).NotTo(HaveOccurred())
 
-		// configMap provides oauth-proxy with the certificates we created above
-		By("creating oauth-proxy pod configMap")
-		_, err = f.KubeClientSet.CoreV1().ConfigMaps(f.Namespace.Name).Create(newOAuthProxyConfigMap(f.Namespace.Name,
-			caPem,
-			serviceCert,
-			serviceKey),
-		)
-		Expect(err).NotTo(HaveOccurred())
+			// configMap provides oauth-proxy with the certificates we created above
+			By("creating oauth-proxy pod configMap")
+			_, err = f.KubeClientSet.CoreV1().ConfigMaps(f.Namespace.Name).Create(newOAuthProxyConfigMap(f.Namespace.Name,
+				tc.certConfigMapName,
+				caPem,
+				serviceCert,
+				serviceKey),
+			)
+			Expect(err).NotTo(HaveOccurred())
 
-		By(fmt.Sprintf("creating oauth-proxy pod with image '%s' and args '%v'", image, oauthProxyArgs))
-		oauthProxyPod, err := f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Create(newOAuthProxyPod(image, oauthProxyArgs))
-		Expect(err).NotTo(HaveOccurred())
+			By(fmt.Sprintf("creating oauth-proxy pod with image '%s' and args '%v'", image, tc.oauthProxyArgs))
+			oauthProxyPod, err := f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Create(newOAuthProxyPod(image, tc.serviceAccountName, tc.certConfigMapName, tc.oauthProxyArgs))
+			Expect(err).NotTo(HaveOccurred())
 
-		By("waiting for oauth-proxy pod to be running")
-		err = framework.WaitForPodRunningInNamespace(f.KubeClientSet, oauthProxyPod)
-		Expect(err).NotTo(HaveOccurred())
+			By("waiting for oauth-proxy pod to be running")
+			err = framework.WaitForPodRunningInNamespace(f.KubeClientSet, oauthProxyPod)
+			Expect(err).NotTo(HaveOccurred())
 
-		// Find the service CA for the client trust store
-		secrets, err := f.KubeClientSet.CoreV1().Secrets(f.Namespace.Name).List(metav1.ListOptions{})
-		Expect(err).NotTo(HaveOccurred())
-		var openshiftPemCA []byte
-		for _, s := range secrets.Items {
-			cert, ok := s.Data["ca.crt"]
-			if !ok {
-				continue
+			// Find the service CA for the client trust store
+			secrets, err := f.KubeClientSet.CoreV1().Secrets(f.Namespace.Name).List(metav1.ListOptions{})
+			Expect(err).NotTo(HaveOccurred())
+			var openshiftPemCA []byte
+			for _, s := range secrets.Items {
+				cert, ok := s.Data["ca.crt"]
+				if !ok {
+					continue
+				}
+				openshiftPemCA = cert
+				break
 			}
-			openshiftPemCA = cert
-			break
+			Expect(openshiftPemCA).ShouldNot(BeNil())
+
+			By("waiting till route is available")
+			err = waitUntilRouteIsReady([][]byte{caPem, openshiftPemCA}, "https://"+proxyRouteHost+"/oauth/start")
+			fmt.Printf("DBG: passed waitUntilRouteIsReady\n")
+			Expect(err).NotTo(HaveOccurred())
+
+			By("stepping through oauth-proxy auth flow")
+			err = confirmOAuthFlow(proxyRouteHost, [][]byte{caPem, openshiftPemCA})
+
+			// XXX temp
+			if try != 2 {
+				// clean up
+				By("Deleting the oauth-proxy pod")
+				_ = f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(tc.appName, nil)
+				//Expect(err).NotTo(HaveOccurred())
+				By("Waiting for pod to go away")
+				framework.WaitForPodDeleted(f.KubeClientSet, oauthProxyPod.Name, f.Namespace.Name)
+
+				// service
+				By("Deleting the oauth-proxy service")
+				_ = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(tc.appName, nil)
+				//Expect(err).NotTo(HaveOccurred())
+
+				// route
+				By("Deleting route")
+				_ = deleteTestRoute(tc.routeName)
+				//Expect(err).NotTo(HaveOccurred())
+
+				// configmap
+				By("Deleting configMap")
+				_ = f.KubeClientSet.CoreV1().ConfigMaps(f.Namespace.Name).Delete(tc.certConfigMapName, nil)
+				//Expect(err).NotTo(HaveOccurred())
+
+				By("Deleting serviceAccount")
+				_ = f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Delete(tc.serviceAccountName, nil)
+				//Expect(err).NotTo(HaveOccurred())
+			}
+			Expect(err).NotTo(HaveOccurred())
+			try++
 		}
-		Expect(openshiftPemCA).ShouldNot(BeNil())
-
-		By("stepping through oauth-proxy auth flow")
-		err = confirmOAuthFlow(proxyRouteHost, [][]byte{caPem, openshiftPemCA})
-		Expect(err).NotTo(HaveOccurred())
-
-		// clean up
-		/*
-			By("Deleting the oauth-proxy oauthProxyPod")
-			err = f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(appName, nil)
-			Expect(err).NotTo(HaveOccurred())
-			By("Deleting the oauth-proxy service")
-			err = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(appName, nil)
-			Expect(err).NotTo(HaveOccurred())
-		*/
 	})
 })
 
@@ -300,12 +369,32 @@ func getResponse(host string, client *http.Client) (*http.Response, error) {
 	return resp, nil
 }
 
-func confirmOAuthFlow(host string, cas [][]byte) error {
-	// Set up the client cert store
+func waitUntilRouteIsReady(cas [][]byte, url string) error {
+	client, err := getHTTPSClient(cas)
+	if err != nil {
+		return err
+	}
+	return wait.PollImmediate(time.Second, 30*time.Second, func() (bool, error) {
+		resp, err := getResponse(url, client)
+		if err != nil {
+			fmt.Printf("DBG waitUntilRouteIsReady PollImmediate err %s\n", err.Error())
+			if err.Error()[len(err.Error())-3:] == "EOF" {
+				return false, nil
+			}
+			fmt.Printf("DBG: other failure\n")
+			return false, err
+		}
+		resp.Body.Close()
+		fmt.Printf("DBG: poll response OK\n")
+		return true, nil
+	})
+}
+
+func getHTTPSClient(cas [][]byte) (*http.Client, error) {
 	pool := x509.NewCertPool()
 	for i := range cas {
 		if !pool.AppendCertsFromPEM(cas[i]) {
-			return fmt.Errorf("error loading CA for client config")
+			return nil, fmt.Errorf("error loading CA for client config")
 		}
 	}
 
@@ -319,6 +408,15 @@ func confirmOAuthFlow(host string, cas [][]byte) error {
 	}
 
 	client := &http.Client{Transport: tr, Jar: jar}
+	return client, nil
+}
+
+func confirmOAuthFlow(host string, cas [][]byte) error {
+	// Set up the client cert store
+	client, err := getHTTPSClient(cas)
+	if err != nil {
+		return err
+	}
 
 	// Go straight to start, redirecting to OpenShift login
 	startUrl := "https://" + host + "/oauth/start"
@@ -326,20 +424,22 @@ func confirmOAuthFlow(host string, cas [][]byte) error {
 	if err != nil {
 		return err
 	}
+	defer resp.Body.Close()
 
 	// OpenShift login
 	loginResp, err := submitOAuthForm(client, resp)
 	if err != nil {
 		return err
 	}
-
+	defer loginResp.Body.Close()
 	// authorization grant form
-	accessResp, err := submitOAuthForm(client, loginResp)
+	grantResp, err := submitOAuthForm(client, loginResp)
 	if err != nil {
 		return err
 	}
+	defer grantResp.Body.Close()
 
-	accessRespBody, err := ioutil.ReadAll(accessResp.Body)
+	accessRespBody, err := ioutil.ReadAll(grantResp.Body)
 	if err != nil {
 		return nil
 	}
@@ -467,6 +567,7 @@ func submitOAuthForm(client *http.Client, response *http.Response) (*http.Respon
 
 	forms := getElementsByTagName(body, "form")
 	if len(forms) != 1 {
+		fmt.Printf("%v", body)
 		return nil, fmt.Errorf("expected OpenShift form")
 	}
 
@@ -496,6 +597,14 @@ func execCmd(cmd string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+func deleteTestRoute(routeName string) error {
+	_, err := execCmd(fmt.Sprintf("oc delete route/%s", routeName))
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func getRouteHost(routeName, namespace string) (string, error) {
@@ -567,10 +676,10 @@ func newOAuthProxyRoute(app, name, toname, namespace string, port int32) error {
 }
 
 // Create SA with an annotation for route routeName
-func newOAuthProxySA(routeName string) *corev1.ServiceAccount {
+func newOAuthProxySA(serviceAccountName, routeName string) *corev1.ServiceAccount {
 	return &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "proxy",
+			Name: serviceAccountName,
 			Annotations: map[string]string{
 				"serviceaccounts.openshift.io/oauth-redirectreference.primary": `{"kind":"OAuthRedirectReference","apiVersion":"v1","reference":{"kind":"Route","name":"` + routeName + `"}}`,
 			},
@@ -578,14 +687,14 @@ func newOAuthProxySA(routeName string) *corev1.ServiceAccount {
 	}
 }
 
-func newOAuthProxyConfigMap(namespace string, pemCA, pemServerCert, pemServerKey []byte) *corev1.ConfigMap {
+func newOAuthProxyConfigMap(namespace, configMapName string, pemCA, pemServerCert, pemServerKey []byte) *corev1.ConfigMap {
 	return &corev1.ConfigMap{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ConfigMap",
 			APIVersion: "v1",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "proxy-certs",
+			Name:      configMapName,
 			Namespace: namespace,
 		},
 		Data: map[string]string{
@@ -596,7 +705,7 @@ func newOAuthProxyConfigMap(namespace string, pemCA, pemServerCert, pemServerKey
 	}
 }
 
-func newOAuthProxyPod(proxyImage string, proxyArgs []string) *corev1.Pod {
+func newOAuthProxyPod(proxyImage, serviceAccountName, certConfigMapName string, proxyArgs []string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "proxy",
@@ -610,12 +719,12 @@ func newOAuthProxyPod(proxyImage string, proxyArgs []string) *corev1.Pod {
 					Name: "proxy-cert-volume",
 					VolumeSource: corev1.VolumeSource{
 						ConfigMap: &corev1.ConfigMapVolumeSource{
-							LocalObjectReference: corev1.LocalObjectReference{Name: "proxy-certs"},
+							LocalObjectReference: corev1.LocalObjectReference{Name: certConfigMapName},
 						},
 					},
 				},
 			},
-			ServiceAccountName: "proxy",
+			ServiceAccountName: serviceAccountName,
 			Containers: []corev1.Container{
 				{
 					Image:           proxyImage,

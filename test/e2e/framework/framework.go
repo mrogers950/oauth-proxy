@@ -20,6 +20,7 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
+	"fmt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	corev1 "k8s.io/client-go/pkg/api/v1"
@@ -43,12 +44,11 @@ type Framework struct {
 
 // NewFramework makes a new framework and sets up a BeforeEach/AfterEach for
 // you (you can write additional before/after each functions).
-func NewDefaultFramework(baseName string) *Framework {
+func NewDefaultFramework(namespace string) *Framework {
 	f := &Framework{
-		BaseName: baseName,
 		Namespace: &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: "oauth-proxy",
+				Name: namespace,
 			},
 		},
 	}
@@ -59,7 +59,7 @@ func NewDefaultFramework(baseName string) *Framework {
 	return f
 }
 
-// BeforeEach gets a client and makes a namespace.
+// BeforeEach gets a client.
 func (f *Framework) BeforeEach() {
 	f.cleanupHandle = AddCleanupAction(f.AfterEach)
 
@@ -68,11 +68,6 @@ func (f *Framework) BeforeEach() {
 	Expect(err).NotTo(HaveOccurred())
 	f.KubeClientSet, err = kubernetes.NewForConfig(kubeConfig)
 	Expect(err).NotTo(HaveOccurred())
-	By("Building a namespace api object")
-	namespace, err := CreateKubeNamespace(f.BaseName, f.KubeClientSet)
-	Expect(err).NotTo(HaveOccurred())
-
-	f.Namespace = namespace
 }
 
 // AfterEach deletes the namespace, after reading its events.
@@ -86,5 +81,6 @@ func (f *Framework) AfterEach() {
 
 // Wrapper function for ginkgo describe.  Adds namespacing.
 func OAuthProxyDescribe(text string, body func()) bool {
+	fmt.Println("Running OAuthProxyDescribe")
 	return Describe("[oauth-proxy] "+text, body)
 }

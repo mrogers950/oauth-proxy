@@ -17,20 +17,12 @@ limitations under the License.
 package framework
 
 import (
-	"flag"
-	"os"
-
 	"github.com/onsi/ginkgo/config"
-
 	"k8s.io/client-go/tools/clientcmd"
-)
-
-const (
-	RecommendedConfigPathEnvVar = "KUBECONFIG"
+	"os"
 )
 
 type TestContextType struct {
-	KubeHost    string
 	KubeConfig  string
 	KubeContext string
 }
@@ -38,7 +30,7 @@ type TestContextType struct {
 var TestContext TestContextType
 
 // Register flags common to all e2e test suites.
-func RegisterCommonFlags() {
+func RegisterConfig() {
 	// Turn on verbose by default to get spec names
 	config.DefaultReporterConfig.Verbose = true
 
@@ -47,13 +39,6 @@ func RegisterCommonFlags() {
 
 	// Randomize specs as well as suites
 	config.GinkgoConfig.RandomizeAllSpecs = true
-
-	flag.StringVar(&TestContext.KubeHost, "kubernetes-host", "http://127.0.0.1:8080", "The kubernetes host, or apiserver, to connect to")
-	flag.StringVar(&TestContext.KubeConfig, "kubernetes-config", os.Getenv(clientcmd.RecommendedConfigPathEnvVar), "Path to config containing embedded authinfo for kubernetes. Default value is from environment variable "+clientcmd.RecommendedConfigPathEnvVar)
-	flag.StringVar(&TestContext.KubeContext, "kubernetes-context", "", "config context to use for kubernetes. If unset, will use value from 'current-context'")
-}
-
-func RegisterParseFlags() {
-	RegisterCommonFlags()
-	flag.Parse()
+	TestContext.KubeConfig = os.Getenv(clientcmd.RecommendedConfigPathEnvVar)
+	TestContext.KubeContext = ""
 }

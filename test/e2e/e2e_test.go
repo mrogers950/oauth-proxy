@@ -17,27 +17,22 @@ limitations under the License.
 package e2e
 
 import (
-	"flag"
 	"testing"
 
 	"k8s.io/client-go/tools/clientcmd"
 
+	"fmt"
 	"github.com/golang/glog"
 	"github.com/openshift/oauth-proxy/test/e2e/framework"
 )
 
-var oauthProxyImageFlag string
-
-func init() {
-	flag.StringVar(&oauthProxyImageFlag, "oauth-proxy-image", "docker.io/openshift/oauth-proxy:v1.0.0",
-		"The container image for the broker to test against")
-	framework.RegisterParseFlags()
+func TestE2E(t *testing.T) {
+	fmt.Println("Running TestE2E")
+	framework.RegisterConfig()
 
 	if "" == framework.TestContext.KubeConfig {
 		glog.Fatalf("environment variable %v must be set", clientcmd.RecommendedConfigPathEnvVar)
 	}
-}
 
-func TestE2E(t *testing.T) {
 	RunE2ETests(t)
 }

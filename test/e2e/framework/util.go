@@ -21,9 +21,8 @@ import (
 	"time"
 
 	. "github.com/onsi/ginkgo"
-	. "github.com/onsi/gomega"
 
-	apierrs "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -40,9 +39,6 @@ const (
 
 	// Default time to wait for operations to complete
 	defaultTimeout = 30 * time.Second
-
-	// Default time to wait for an endpoint to register
-	EndpointRegisterTimeout = time.Minute
 )
 
 func nowStamp() string {
@@ -55,18 +51,6 @@ func log(level string, format string, args ...interface{}) {
 
 func Logf(format string, args ...interface{}) {
 	log("INFO", format, args...)
-}
-
-func Failf(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
-	log("INFO", msg)
-	Fail(nowStamp()+": "+msg, 1)
-}
-
-func Skipf(format string, args ...interface{}) {
-	msg := fmt.Sprintf(format, args...)
-	log("INFO", msg)
-	Skip(nowStamp() + ": " + msg)
 }
 
 func RestclientConfig(config, context string) (*api.Config, error) {
@@ -98,44 +82,6 @@ func LoadConfig(config, context string) (*rest.Config, error) {
 // unique identifier of the e2e run
 var RunId = uuid.NewUUID()
 
-func CreateKubeNamespace(baseName string, c kubernetes.Interface) (*corev1.Namespace, error) {
-
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			GenerateName: fmt.Sprintf("e2e-tests-%v-", baseName),
-			Namespace:    "proxy-test",
-		},
-	}
-
-	Logf("namespace: %v", ns)
-	// Be robust about making the namespace creation call.
-	var got *corev1.Namespace
-	err := wait.PollImmediate(Poll, defaultTimeout, func() (bool, error) {
-		var err error
-		got, err = c.Core().Namespaces().Create(ns)
-		if err != nil {
-			Logf("Unexpected error while creating namespace: %v", err)
-			return false, nil
-		}
-		return true, nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return got, nil
-}
-
-func DeleteKubeNamespace(c kubernetes.Interface, namespace string) error {
-	return c.CoreV1().Namespaces().Delete(namespace, nil)
-}
-
-func ExpectNoError(err error, explain ...interface{}) {
-	if err != nil {
-		Logf("Unexpected error occurred: %v", err)
-	}
-	ExpectWithOffset(1, err).NotTo(HaveOccurred(), explain...)
-}
-
 // Waits default amount of time (PodStartTimeout) for the specified pod to become running.
 // Returns an error if timeout occurs first, or pod goes in to failed state.
 func WaitForPodRunningInNamespace(c kubernetes.Interface, pod *corev1.Pod) error {
@@ -149,25 +95,20 @@ func waitTimeoutForPodRunningInNamespace(c kubernetes.Interface, podName, namesp
 	return wait.PollImmediate(Poll, defaultTimeout, podRunning(c, podName, namespace))
 }
 
-func WaitForEndpoint(c kubernetes.Interface, namespace, name string) error {
-	return wait.PollImmediate(Poll, EndpointRegisterTimeout, endpointAvailable(c, namespace, name))
+func WaitForPodDeleted(c kubernetes.Interface, podName, namespace string) error {
+	return wait.PollImmediate(Poll, defaultTimeout, podDeleted(c, podName, namespace))
 }
 
-func endpointAvailable(c kubernetes.Interface, namespace, name string) wait.ConditionFunc {
+func podDeleted(c kubernetes.Interface, podName, namespace string) wait.ConditionFunc {
 	return func() (bool, error) {
-		endpoint, err := c.CoreV1().Endpoints(namespace).Get(name, metav1.GetOptions{})
+		_, err := c.CoreV1().Pods(namespace).Get(podName, metav1.GetOptions{})
 		if err != nil {
-			if apierrs.IsNotFound(err) {
-				return false, nil
+			if errors.IsNotFound(err) {
+				return true, nil
 			}
 			return false, err
 		}
-
-		if len(endpoint.Subsets) == 0 || len(endpoint.Subsets[0].Addresses) == 0 {
-			return false, nil
-		}
-
-		return true, nil
+		return false, nil
 	}
 }
 
