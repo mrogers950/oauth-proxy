@@ -31,6 +31,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
+	randn "math/rand"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -188,7 +189,6 @@ func createCAandCertSet(host string) ([]byte, []byte, []byte, error) {
 }
 
 var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
-
 	oauthProxyTests := map[string]struct {
 		appName            string
 		routeName          string
@@ -198,6 +198,8 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 		serviceAccountName string
 		certConfigMapName  string
 		oauthProxyArgs     []string
+		expectedErr        string
+		skipCleanup        bool
 	}{
 		"basic": {
 			appName:            "proxy",
@@ -217,8 +219,9 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 				"--tls-client-ca=/etc/tls/private/ca.crt",
 				"--cookie-secret=SECRET",
 			},
+			expectedErr: "",
 		},
-		"basic-copy": {
+		"scope-full": {
 			appName:            "proxy",
 			routeName:          "proxy-route",
 			routePort:          int32(8443),
@@ -235,7 +238,9 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 				"--tls-key=/etc/tls/private/tls.key",
 				"--tls-client-ca=/etc/tls/private/ca.crt",
 				"--cookie-secret=SECRET",
+				"--scope=user:full",
 			},
+			expectedErr: "403 Permission Denied",
 		},
 	}
 
@@ -248,15 +253,17 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 		ns = "default"
 	}
 
+	randn.Seed(time.Now().UTC().UnixNano())
+
 	f := framework.NewDefaultFramework(ns)
 
-	try := 1
 	It(fmt.Sprintf("running test suite: namespace: %s", f.Namespace.Name), func() {
-
 		for tcName, tc := range oauthProxyTests {
 			By(fmt.Sprintf("Test: %s", tcName))
+
 			By(fmt.Sprintf("creating oauth-proxy service account with annotation for route '%s'", tc.routeName))
-			_, err := f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(newOAuthProxySA(tc.serviceAccountName, tc.routeName))
+			_, err := f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Create(newOAuthProxySA(tc.serviceAccountName,
+				tc.routeName))
 			Expect(err).NotTo(HaveOccurred())
 
 			By(fmt.Sprintf("creating route '%s' with port %v to oauth-proxy", tc.routeName, tc.routePort))
@@ -290,7 +297,10 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			By(fmt.Sprintf("creating oauth-proxy pod with image '%s' and args '%v'", image, tc.oauthProxyArgs))
-			oauthProxyPod, err := f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Create(newOAuthProxyPod(image, tc.serviceAccountName, tc.certConfigMapName, tc.oauthProxyArgs))
+			oauthProxyPod, err := f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Create(newOAuthProxyPod(image,
+				tc.serviceAccountName,
+				tc.certConfigMapName,
+				tc.oauthProxyArgs))
 			Expect(err).NotTo(HaveOccurred())
 
 			By("waiting for oauth-proxy pod to be running")
@@ -300,6 +310,7 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 			// Find the service CA for the client trust store
 			secrets, err := f.KubeClientSet.CoreV1().Secrets(f.Namespace.Name).List(metav1.ListOptions{})
 			Expect(err).NotTo(HaveOccurred())
+
 			var openshiftPemCA []byte
 			for _, s := range secrets.Items {
 				cert, ok := s.Data["ca.crt"]
@@ -313,42 +324,26 @@ var _ = framework.OAuthProxyDescribe("oauth-proxy", func() {
 
 			By("waiting till route is available")
 			err = waitUntilRouteIsReady([][]byte{caPem, openshiftPemCA}, "https://"+proxyRouteHost+"/oauth/start")
-			fmt.Printf("DBG: passed waitUntilRouteIsReady\n")
 			Expect(err).NotTo(HaveOccurred())
 
 			By("stepping through oauth-proxy auth flow")
-			err = confirmOAuthFlow(proxyRouteHost, [][]byte{caPem, openshiftPemCA})
+			err = confirmOAuthFlow(proxyRouteHost, [][]byte{caPem, openshiftPemCA}, tc.expectedErr)
 
-			// XXX temp
-			if try != 2 {
-				// clean up
-				By("Deleting the oauth-proxy pod")
-				_ = f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(tc.appName, nil)
-				//Expect(err).NotTo(HaveOccurred())
-				By("Waiting for pod to go away")
+			if !tc.skipCleanup {
+				By("cleaning up")
+				f.KubeClientSet.CoreV1().Pods(f.Namespace.Name).Delete(tc.appName, nil)
+				f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(tc.appName, nil)
+				deleteTestRoute(tc.routeName)
+				f.KubeClientSet.CoreV1().ConfigMaps(f.Namespace.Name).Delete(tc.certConfigMapName, nil)
+				f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Delete(tc.serviceAccountName, nil)
 				framework.WaitForPodDeleted(f.KubeClientSet, oauthProxyPod.Name, f.Namespace.Name)
-
-				// service
-				By("Deleting the oauth-proxy service")
-				_ = f.KubeClientSet.CoreV1().Services(f.Namespace.Name).Delete(tc.appName, nil)
-				//Expect(err).NotTo(HaveOccurred())
-
-				// route
-				By("Deleting route")
-				_ = deleteTestRoute(tc.routeName)
-				//Expect(err).NotTo(HaveOccurred())
-
-				// configmap
-				By("Deleting configMap")
-				_ = f.KubeClientSet.CoreV1().ConfigMaps(f.Namespace.Name).Delete(tc.certConfigMapName, nil)
-				//Expect(err).NotTo(HaveOccurred())
-
-				By("Deleting serviceAccount")
-				_ = f.KubeClientSet.CoreV1().ServiceAccounts(f.Namespace.Name).Delete(tc.serviceAccountName, nil)
-				//Expect(err).NotTo(HaveOccurred())
 			}
-			Expect(err).NotTo(HaveOccurred())
-			try++
+
+			if tc.expectedErr != "" {
+				Expect(err).To(MatchError(tc.expectedErr))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
 		}
 	})
 })
@@ -370,27 +365,24 @@ func getResponse(host string, client *http.Client) (*http.Response, error) {
 }
 
 func waitUntilRouteIsReady(cas [][]byte, url string) error {
-	client, err := getHTTPSClient(cas)
+	client, err := newHTTPSClient(cas)
 	if err != nil {
 		return err
 	}
 	return wait.PollImmediate(time.Second, 30*time.Second, func() (bool, error) {
 		resp, err := getResponse(url, client)
 		if err != nil {
-			fmt.Printf("DBG waitUntilRouteIsReady PollImmediate err %s\n", err.Error())
 			if err.Error()[len(err.Error())-3:] == "EOF" {
 				return false, nil
 			}
-			fmt.Printf("DBG: other failure\n")
 			return false, err
 		}
 		resp.Body.Close()
-		fmt.Printf("DBG: poll response OK\n")
 		return true, nil
 	})
 }
 
-func getHTTPSClient(cas [][]byte) (*http.Client, error) {
+func newHTTPSClient(cas [][]byte) (*http.Client, error) {
 	pool := x509.NewCertPool()
 	for i := range cas {
 		if !pool.AppendCertsFromPEM(cas[i]) {
@@ -411,9 +403,9 @@ func getHTTPSClient(cas [][]byte) (*http.Client, error) {
 	return client, nil
 }
 
-func confirmOAuthFlow(host string, cas [][]byte) error {
+func confirmOAuthFlow(host string, cas [][]byte, expectedErr string) error {
 	// Set up the client cert store
-	client, err := getHTTPSClient(cas)
+	client, err := newHTTPSClient(cas)
 	if err != nil {
 		return err
 	}
@@ -427,13 +419,14 @@ func confirmOAuthFlow(host string, cas [][]byte) error {
 	defer resp.Body.Close()
 
 	// OpenShift login
-	loginResp, err := submitOAuthForm(client, resp)
+	loginResp, err := submitOAuthForm(client, resp, expectedErr)
 	if err != nil {
 		return err
 	}
 	defer loginResp.Body.Close()
+
 	// authorization grant form
-	grantResp, err := submitOAuthForm(client, loginResp)
+	grantResp, err := submitOAuthForm(client, loginResp, expectedErr)
 	if err != nil {
 		return err
 	}
@@ -444,9 +437,8 @@ func confirmOAuthFlow(host string, cas [][]byte) error {
 		return nil
 	}
 
-	fmt.Printf("response body: %s\n", string(accessRespBody))
 	if string(accessRespBody) != "Hello OpenShift!\n" {
-		return fmt.Errorf("did not reach backend site")
+		return fmt.Errorf("did not reach upstream site")
 	}
 
 	return nil
@@ -457,6 +449,16 @@ func visit(n *html.Node, visitor func(*html.Node)) {
 	for c := n.FirstChild; c != nil; c = c.NextSibling {
 		visit(c, visitor)
 	}
+}
+
+func getTextNodes(root *html.Node) []*html.Node {
+	elements := []*html.Node{}
+	visit(root, func(n *html.Node) {
+		if n.Type == html.TextNode {
+			elements = append(elements, n)
+		}
+	})
+	return elements
 }
 
 func getElementsByTagName(root *html.Node, tagName string) []*html.Node {
@@ -476,6 +478,16 @@ func getAttr(element *html.Node, attrName string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Varying the login name for each test ensures we test a fresh grant
+func randLogin() string {
+	var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	b := make([]rune, 5)
+	for i := range b {
+		b[i] = letters[randn.Intn(len(letters))]
+	}
+	return "developer" + string(b)
 }
 
 // newRequestFromForm builds a request that simulates submitting the given form.
@@ -516,7 +528,7 @@ func newRequestFromForm(form *html.Node, currentURL *url.URL) (*http.Request, er
 				switch inputType {
 				case "text":
 					if name == "username" {
-						formData.Add(name, "developer")
+						formData.Add(name, randLogin())
 					}
 				case "password":
 					if name == "password" {
@@ -559,16 +571,38 @@ func newRequestFromForm(form *html.Node, currentURL *url.URL) (*http.Request, er
 	return req, nil
 }
 
-func submitOAuthForm(client *http.Client, response *http.Response) (*http.Response, error) {
-	body, err := html.Parse(response.Body)
+func submitOAuthForm(client *http.Client, response *http.Response, expectedErr string) (*http.Response, error) {
+	responseBytes, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	responseBuffer := bytes.NewBuffer(responseBytes)
+
+	body, err := html.Parse(responseBuffer)
 	if err != nil {
 		return nil, err
 	}
 
 	forms := getElementsByTagName(body, "form")
 	if len(forms) != 1 {
-		fmt.Printf("%v", body)
-		return nil, fmt.Errorf("expected OpenShift form")
+		errMsg := "expected OpenShift form"
+		// Return expectedErr if found amongst text elements
+		if expectedErr != "" {
+			checkBuffer := bytes.NewBuffer(responseBytes)
+			parsed, err := html.Parse(checkBuffer)
+			if err != nil {
+				return nil, err
+			}
+
+			textNodes := getTextNodes(parsed)
+			for i := range textNodes {
+				if textNodes[i].Data == expectedErr {
+					errMsg = expectedErr
+				}
+			}
+		}
+		return nil, fmt.Errorf(errMsg)
 	}
 
 	formReq, err := newRequestFromForm(forms[0], response.Request.URL)
@@ -650,6 +684,7 @@ func newOAuthProxyRoute(app, name, toname, namespace string, port int32) error {
 		return err
 	}
 	defer routeYamlFile.Close()
+	defer os.Remove(routeYamlFile.Name())
 
 	// execute template
 	writer := bufio.NewWriter(routeYamlFile)
@@ -667,12 +702,8 @@ func newOAuthProxyRoute(app, name, toname, namespace string, port int32) error {
 	writer.Flush()
 
 	// create route
-	out, err := execCmd(fmt.Sprintf("oc create -f %s", routeYamlFile.Name()))
-	if err != nil {
-		fmt.Printf(out)
-		return err
-	}
-	return nil
+	_, err = execCmd(fmt.Sprintf("oc create -f %s", routeYamlFile.Name()))
+	return err
 }
 
 // Create SA with an annotation for route routeName

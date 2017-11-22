@@ -20,7 +20,6 @@ import (
 	. "github.com/onsi/ginkgo"
 	. "github.com/onsi/gomega"
 
-	"fmt"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	corev1 "k8s.io/client-go/pkg/api/v1"
@@ -81,6 +80,5 @@ func (f *Framework) AfterEach() {
 
 // Wrapper function for ginkgo describe.  Adds namespacing.
 func OAuthProxyDescribe(text string, body func()) bool {
-	fmt.Println("Running OAuthProxyDescribe")
 	return Describe("[oauth-proxy] "+text, body)
 }
